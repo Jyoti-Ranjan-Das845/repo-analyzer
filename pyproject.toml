@@ -1,0 +1,30 @@
+[project]
+name = "repo-analyzer"
+version = "1.0.0"
+description = "Score how much work it takes to make a safe change in each part of a codebase"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "tree-sitter>=0.25",
+    "tree-sitter-language-pack>=1.21",
+    "pathspec>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+repo-analyzer = "repo_analyzer.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["repo_analyzer*"]
+
+[tool.setuptools.package-data]
+repo_analyzer = ["docs/*.md", "web/*.css", "web/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
