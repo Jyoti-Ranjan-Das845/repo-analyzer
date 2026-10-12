@@ -17,7 +17,7 @@ open /path/to/project/.repo-analyzer/report.html
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.11 or newer. With [uv](https://docs.astral.sh/uv/), the installer fetches a suitable Python by itself.
 - Omnigent (the `omni` command; tested with 0.16.0) and the Claude CLI (`claude`), signed in to a Claude
   subscription. The agent runs through Omnigent's `claude-sdk` harness; no API key is needed.
 - Optional: `git`. Inside a git checkout, git decides which files belong to the project.
@@ -27,11 +27,24 @@ open /path/to/project/.repo-analyzer/report.html
 ```bash
 git clone https://github.com/Jyoti-Ranjan-Das845/repo-analyzer.git
 cd repo-analyzer
-python3 -m venv .venv
-.venv/bin/pip install -e .
+./install.sh
 ```
 
-This installs the `repo-analyzer` command into `.venv/bin/` (`python -m repo_analyzer` works the same).
+The installer copies the tool into your home folder and puts the `repo-analyzer` command in `~/.local/bin`, so it
+runs from any folder. The cloned folder is not needed afterwards.
+
+- It uses uv if you have it, else pipx, else a Python 3.11+ virtual environment in `~/.local/share/repo-analyzer/`.
+- If `~/.local/bin` is not on your `PATH`, it adds it to your shell's startup file; open a new terminal afterwards
+  (`REPO_ANALYZER_NO_MODIFY_PATH=1 ./install.sh` skips this).
+- Update: `git pull`, then `./install.sh` again. Remove: `./install.sh --uninstall`.
+
+Without cloning:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jyoti-Ranjan-Das845/repo-analyzer/main/install.sh | bash
+```
+
+To work on the code itself, see [Development](#development).
 
 ## Usage
 
@@ -184,11 +197,14 @@ Defaults are in [`repo_analyzer/config.py`](repo_analyzer/config.py):
 ## Development
 
 ```bash
+git clone https://github.com/Jyoti-Ranjan-Das845/repo-analyzer.git
+cd repo-analyzer
+python3 -m venv .venv                 # Python 3.11 or newer
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest
 ```
 
-The tests cover file listing, parsing, map checking, deterministic completion, scoring, the report, the agent's
+`.venv/bin/repo-analyzer` then runs the working copy (`python -m repo_analyzer` works the same). The tests cover file listing, parsing, map checking, deterministic completion, scoring, the report, the agent's
 policies, and whole runs. Whole runs use a fake Omnigent ([`tests/fake_omni.py`](tests/fake_omni.py)) that can
 finish, stop early, lose the network, fail, hang or be interrupted, so every recovery path is exercised without
 calling a model.
@@ -213,4 +229,5 @@ repo_analyzer/
   web/             the report page's style and script
 docs/              the scoring rules, a score check on datasette, notes on setup effort
 tests/             the test suite and the fake Omnigent
+install.sh         installs the repo-analyzer command for the current user
 ```
