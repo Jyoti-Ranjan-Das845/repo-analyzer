@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--effort", default=K.AGENT_EFFORT, choices=("low", "medium", "high", "xhigh", "max"),
                    help=f"the agent's reasoning effort (default {K.AGENT_EFFORT})")
     p.add_argument("--max-sessions", type=int, default=None, metavar="N",
-                   help="at most N agent sessions of about 30 minutes (default: scaled to the project's size)")
+                   help="at most N agent sessions (default: scaled to the project's size; one is normally enough)")
     p.add_argument("--skip-preflight", action="store_true", help="do not check Omnigent and Claude before starting")
     p.add_argument("--quiet", action="store_true", help="do not print every file the agent opens")
 

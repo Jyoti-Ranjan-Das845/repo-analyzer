@@ -62,7 +62,7 @@ Options of `analyze`:
 | `--fresh` | Start over instead of continuing an earlier run |
 | `--model NAME` | The agent's model (default `claude-opus-5-5[1m]`) |
 | `--effort LEVEL` | The agent's reasoning effort: `low`, `medium`, `high`, `xhigh` or `max` (default `max`) |
-| `--max-sessions N` | At most N agent sessions of about 30 minutes (default: scaled to the project's size) |
+| `--max-sessions N` | At most N agent sessions (default: scaled to the project's size; one is normally enough) |
 | `--skip-preflight` | Do not check Omnigent and Claude before starting |
 | `--quiet` | Do not print every file the agent opens |
 
@@ -126,8 +126,10 @@ own `.gitignore`. Delete the folder to remove every trace of the analysis.
 **The agent** is an Omnigent agent run non-interactively (`omni run <agent> --no-session -p ...`), so it never waits
 for input. Its working directory is the project folder. It can read files, search with a few read-only shell
 commands, run the map checker, and write exactly two files: the map and its notes. It is told never to ask
-questions and to make the map complete early and refine it afterwards. A session lasts at most about 30 minutes;
-sessions are chained, each continuing from the saved map and notes, until the agent reports the map complete.
+questions and to make the map complete early and refine it afterwards. One session runs until the agent reports
+the map complete, however long that takes (Omnigent's own 30-minute limit for `-p` runs is lifted for it); only if
+a session ends early, for example when a very big project fills the agent's memory, does a new session continue
+from the saved map and notes.
 The definition is generated per run from [`omnigent.py`](repo_analyzer/omnigent.py) (tools and policies) and
 [`agent.py`](repo_analyzer/agent.py) (instructions); the copy used is in `.repo-analyzer/agent/`.
 

@@ -64,3 +64,30 @@ def test_progress_events_skip_duplicates_and_tool_loading():
     assert events_from_item(runner) == [{"kind": "tool", "tool": "read", "detail": "src/a.py"}]
     assert events_from_item(model_copy) == [] and events_from_item(loader) == []
     assert events_from_item(text) == [{"kind": "text", "text": "Reading the cart."}]
+
+
+def test_omnigent_is_started_without_its_30_minute_limit(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    from repo_analyzer import omnigent as om
+
+    pkg = tmp_path / "lib" / "omnigent"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "chat.py").write_text("_LOOP_TIMEOUT_S = 1800.0\n")
+    (pkg / "cli.py").write_text("import sys\nimport omnigent.chat as c\n\ndef main():\n"
+                                "    print(c._LOOP_TIMEOUT_S, sys.argv[0], *sys.argv[1:])\n    return 0\n")
+    omni = tmp_path / "omni"
+    omni.write_text(f"#!{sys.executable}\nfrom omnigent.cli import main\nmain()\n")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "lib"))
+    om._command_cache.clear()
+    cmd = om.omnigent_command(str(omni))
+    assert cmd[0] == sys.executable                                     # Omnigent's own Python, limit raised
+    out = subprocess.run([*cmd, "run", "bundle", "-p", "go"], capture_output=True, text=True).stdout.split()
+    assert float(out[0]) > 24 * 3600 and out[1:] == ["omni", "run", "bundle", "-p", "go"]
+
+    plain = tmp_path / "plain-omni"                                      # not a Python script: used as it is
+    plain.write_text("#!/bin/sh\necho hi\n")
+    assert om.omnigent_command(str(plain)) == [str(plain)]
+    om._command_cache.clear()

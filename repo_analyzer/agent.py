@@ -2,9 +2,9 @@
 
 prepare_task() writes what the agent reads into .repo-analyzer/task/ (the map format, a folder overview, the exact
 piece names) and starts map.json and notes.md. run_mapping_agent() runs non-interactive Omnigent sessions with the
-project folder as working directory. A session lasts at most about 32 minutes, so sessions are chained: each one
-continues from the saved map and the agent's notes until the agent reports the map complete or the session budget
-is used. The agent is told to make the map complete early and refine it afterwards, so a usable map exists even if
+project folder as working directory. Normally one session runs until the agent reports the map complete. If a
+session ends earlier (the agent's memory fills up on a very big project, or an outage), the next one continues
+from the saved map and the agent's notes, until the map is complete or the session budget is used. The agent is told to make the map complete early and refine it afterwards, so a usable map exists even if
 the budget runs out; whatever is left is fixed by completion.py.
 """
 
@@ -106,7 +106,7 @@ when something is unclear, decide yourself, write the decision in your notes, an
   block with `grep -n '^## path/to/file' {task}/pieces.md` and read that part with an offset.
 - {ws.map_path} : the map you write (a starting file is there).
 - {ws.notes_path} : your notes. Keep them current: what you have read, what you decided, what is left. The task
-  runs over several sessions of about 30 minutes; each new session starts from these notes and the map.
+  may run over several sessions; each new session starts from these notes and the map.
 
 ## Tools
 - sys_os_read reads a file (paths relative to the project; use offset and limit for long files). sys_os_write and

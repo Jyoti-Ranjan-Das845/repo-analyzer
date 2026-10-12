@@ -8,8 +8,9 @@ The agent definition (a bundle folder with config.yaml + instructions.md) is wri
 
 `omni run <bundle> --no-session -p <kickoff>` runs with the project folder as its working directory, so it never
 waits for input: one prompt in, one final answer out (stdout). Progress is read from the session's local
-database ($TMPDIR/ap-chat-data-*/chat.db), which Omnigent writes as the agent works. Omnigent follows a -p run
-for about 32 minutes, so callers chain sessions for long tasks (see agent.py).
+database ($TMPDIR/ap-chat-data-*/chat.db), which Omnigent writes as the agent works. `omni run -p` stops following
+a session after 30 minutes; omnigent_command() starts Omnigent with that limit lifted, so one session runs until
+the agent finishes. If that is not possible (a different Omnigent version), sessions are chained (see agent.py).
 """
 
 from __future__ import annotations
@@ -60,6 +61,39 @@ def find_omni() -> str:
         raise AgentError("Omnigent is not installed: the `omni` command was not found "
                          f"(install Omnigent, or set {K.OMNI_PATH_ENV} to its path)")
     return path
+
+
+# Starts Omnigent's own command line in its own Python, after raising the time `omni run -p` follows a session
+# (omnigent.chat._LOOP_TIMEOUT_S, 30 minutes). Omnigent's installed files are not changed.
+_LAUNCH = ("import sys\n"
+           "import omnigent.chat as chat\n"
+           "chat._LOOP_TIMEOUT_S = float(sys.argv.pop(1))\n"
+           "from omnigent.cli import main\n"
+           "sys.argv[0] = 'omni'\n"
+           "sys.exit(main())\n")
+_command_cache: dict[str, list[str]] = {}
+
+
+def omnigent_command(omni: str) -> list[str]:
+    """How to start Omnigent: through its own Python with the follow limit lifted when its `omni` script allows
+    that, else the `omni` command as it is (sessions are then chained every 30 minutes)."""
+    if omni in _command_cache:
+        return _command_cache[omni]
+    command = [omni]
+    try:
+        with open(omni, "rb") as fh:
+            first = fh.readline(512).decode("utf-8", "replace").strip()
+        python = first[2:].strip().split()[0] if first.startswith("#!") else ""
+        if python and "python" in os.path.basename(python) and os.access(python, os.X_OK):
+            probe = subprocess.run([python, "-c", "import omnigent.chat as c, omnigent.cli as m; "
+                                    "assert isinstance(c._LOOP_TIMEOUT_S, (int, float)) and callable(m.main)"],
+                                   capture_output=True, timeout=120)
+            if probe.returncode == 0:
+                command = [python, "-c", _LAUNCH, str(float(K.OMNIGENT_FOLLOW_SECONDS))]
+    except (OSError, IndexError, subprocess.SubprocessError):
+        pass
+    _command_cache[omni] = command
+    return command
 
 
 def find_claude() -> str | None:
@@ -411,7 +445,7 @@ def run_session(bundle: Path, kickoff: str, cwd: Path, on_event: Callable[[dict]
 
     Raises AgentCancelled when `cancel` is set, AgentUnavailable when the model service or network failed or the
     session stalled (no new step while its processes use no CPU), AgentError for any other failure."""
-    timeout = K.AGENT_SESSION_TIMEOUT_SECONDS if timeout is None else timeout
+    timeout = timeout if timeout is not None else K.AGENT_SESSION_TIMEOUT_SECONDS     # None: no time limit
     stall = K.AGENT_STALL_SECONDS if stall is None else stall
     omni = find_omni()
     claude = find_claude()
@@ -421,7 +455,8 @@ def run_session(bundle: Path, kickoff: str, cwd: Path, on_event: Callable[[dict]
     env = {**os.environ, "TMPDIR": str(tmpdir)}
     if claude:
         env["OMNIGENT_CLAUDE_PATH"] = claude
-    cmd = [omni, "run", str(bundle), "--no-session", "--harness", "claude-sdk", "--model", model, "-p", kickoff]
+    cmd = [*omnigent_command(omni), "run", str(bundle), "--no-session", "--harness", "claude-sdk", "--model", model,
+           "-p", kickoff]
     progress = _Progress(tmpdir, on_event, cwd)
     started = time.time()
     pid_file = bundle / PID_FILE
@@ -450,7 +485,7 @@ def run_session(bundle: Path, kickoff: str, cwd: Path, on_event: Callable[[dict]
                 if cancel is not None and cancel.is_set():
                     _kill(proc)
                     raise AgentCancelled("interrupted")
-                if now - started > timeout:
+                if timeout is not None and now - started > timeout:
                     _kill(proc)
                     raise AgentUnavailable(f"the session did not finish within {timeout / 60:.0f} minutes")
                 if now - cpu_mark[0] >= K.AGENT_STALL_CHECK_SECONDS:

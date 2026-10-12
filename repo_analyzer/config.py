@@ -123,7 +123,11 @@ AGENT_MODEL = "claude-opus-5-5[1m]"  # 1M-token context: the agent reads a whole
 AGENT_EFFORT = "max"                 # low | medium | high | xhigh | max
 AGENT_CLAUDE_PATH = None             # None = the newest `claude` CLI found on this machine
 OMNI_PATH_ENV = "REPO_ANALYZER_OMNI"  # environment variable that can point at a specific `omni` executable
-AGENT_SESSION_TIMEOUT_SECONDS = 40 * 60   # Omnigent follows one -p session for about 32 minutes
+# One session runs until the agent finishes: no time limit. `omni run -p` itself stops following a session after
+# 30 minutes (a fixed value in Omnigent, with no option); omnigent.py starts Omnigent with that value raised to
+# this. A stuck session is caught by the stall check below instead.
+AGENT_SESSION_TIMEOUT_SECONDS = None
+OMNIGENT_FOLLOW_SECONDS = 30 * 24 * 3600
 # A session with no new step for this long, while its processes use no CPU, is stuck (for example on a dead
 # network connection): it is stopped and the next session continues the work.
 AGENT_STALL_SECONDS = 20 * 60
