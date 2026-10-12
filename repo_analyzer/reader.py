@@ -20,7 +20,7 @@ import tree_sitter_language_pack as tslp
 from . import config as K
 from .files import Listing, list_project_files
 
-READER_VERSION = 11          # bump when the facts the reader records change; old caches are then ignored
+READER_VERSION = 12          # bump when the facts the reader records change; old caches are then ignored
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "repo-analyzer" / "facts"
 
 
@@ -86,7 +86,9 @@ class FileFacts:
     hidden: list[tuple[int, int, str]] = field(default_factory=list)     # (line, unit, what)
     writes: list[tuple[int, int, str]] = field(default_factory=list)     # (line, unit, target)
     fn_args: list[tuple[int, int, str]] = field(default_factory=list)    # names passed as arguments
-    import_text: str = ""
+    # import lines: (start byte, end byte, text). Parts of an import line that are import nodes themselves are
+    # listed too (a Go import block and each of its specs); imports.py tells them apart by their spans.
+    imports: list[tuple[int, int, str]] = field(default_factory=list)
     parse_errors: int = 0
 
     @property
@@ -122,16 +124,25 @@ def _parser(language: str):
 
 @lru_cache(maxsize=None)
 def _tags_query(language: str):
-    try:
-        src = tslp.get_tags_query(language)
-    except Exception:
-        return None
-    if not src:
-        return None
-    try:
-        return ts.Query(tslp.get_language(language), src)
-    except Exception:
-        return None
+    """The grammar's tags query, together with the query it extends (config.TAGS_QUERY_EXTENDS)."""
+    sources = []
+    for lang in (K.TAGS_QUERY_EXTENDS.get(language), language):
+        if not lang:
+            continue
+        try:
+            src = tslp.get_tags_query(lang)
+        except Exception:
+            src = None
+        if src:
+            sources.append(src)
+    for src in dict.fromkeys(("\n".join(sources), sources[-1] if sources else "")):
+        if not src:
+            continue
+        try:
+            return ts.Query(tslp.get_language(language), src)
+        except Exception:
+            continue                               # the combined query does not fit: the language's own
+    return None
 
 
 def _is_name_leaf(node) -> bool:
@@ -506,8 +517,15 @@ def _analyze(facts: FileFacts, root, raw: bytes, units: list[Unit]) -> None:
                         facts.hidden.append((line, u.id, "call picked at run time: " + " ".join(text(callee).split())[:60]))
                     if name in K.CONCURRENCY_CALLS:
                         facts.concurrency.append((line, u.id, 1))
-                    if name in ("require", "require_relative"):
-                        facts.import_text += text(n) + "\n"
+                    if name in K.IMPORT_CALLS or inner.type == "import":
+                        # x = require('./x'): the line brings in the name it is assigned to
+                        holder, parent = n, n.parent
+                        if parent is not None and parent.type == "expression_list":
+                            parent = parent.parent
+                        if parent is not None and (K.DECLARATOR_RE.search(parent.type) or
+                                                   K.ASSIGN_RE.search(parent.type)):
+                            holder = parent
+                        facts.imports.append((holder.start_byte, holder.end_byte, text(holder)))
 
             # ---- hidden flow: decorators, functions handed to other code
             if t in K.DECORATOR_TYPES:
@@ -525,8 +543,8 @@ def _analyze(facts: FileFacts, root, raw: bytes, units: list[Unit]) -> None:
                     if _is_name_leaf(c):
                         facts.fn_args.append((c.start_point[0] + 1, unit_of(c).id, text(c)))
 
-            if K.IMPORT_RE.search(t):
-                facts.import_text += text(n) + "\n"
+            if K.IMPORT_RE.search(t) and n.child_count:
+                facts.imports.append((n.start_byte, n.end_byte, text(n)))
 
         # ---- operator and keyword tokens: and/or, async
         for c in n.children:

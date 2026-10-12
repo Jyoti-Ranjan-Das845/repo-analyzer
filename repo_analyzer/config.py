@@ -24,6 +24,10 @@ SKIP_DIRS = {".git", ".hg", ".svn", WORK_DIR, "node_modules", "bower_components"
              ".idea", ".DS_Store"}
 
 # --- definitions (pieces) -------------------------------------------------------------------------
+# Grammars whose tags query is written as an addition to another grammar's query. tree-sitter-typescript ships
+# its tags.scm (interfaces, signatures, abstract classes) to be used together with tree-sitter-javascript's
+# (functions, classes, methods), because the TypeScript grammar extends the JavaScript one.
+TAGS_QUERY_EXTENDS = {"typescript": "javascript", "tsx": "javascript"}
 # tags-query kinds that are not pieces (they are values, not code blocks)
 NON_PIECE_KINDS = {"constant", "variable", "field", "property", "parameter", "label", "local", "event",
                    "enum_variant", "macro_invocation"}
@@ -45,6 +49,19 @@ INDEX_TYPES = {"subscript", "subscript_expression", "index_expression", "element
 MEMBER_RE = re.compile(r"(attribute|member_expression|member_access|selector_expression|field_access"
                        r"|field_expression|scoped_identifier|navigation_expression)")
 IMPORT_RE = re.compile(r"(import|use_declaration|preproc_include|^using_directive$)")
+IMPORT_CALLS = {"require", "require_relative"}     # calls that load a module (the import() call is one too)
+
+# --- imports (imports.py) -------------------------------------------------------------------------
+# A folder named by an import stands for its main file when it has one, else for all its files in the importing
+# file's language (a Go or Java package).
+MODULE_MAIN_NAMES = {"__init__", "index", "mod", "main", "lib"}
+# Words of import lines that are syntax: never a module name and never a name the import brings in.
+IMPORT_KEYWORDS = {"import", "from", "as", "use", "using", "require", "require_relative", "include", "static",
+                   "package", "extern", "crate", "pub", "const", "let", "var", "type", "typeof", "export",
+                   "default", "namespace", "module", "self", "super", "this", "load", "with"}
+# A name looked up in an imported file is also looked for in the files that file imports, this many steps on
+# (index.js or __init__.py files pass on names defined elsewhere).
+REEXPORT_DEPTH = 2
 
 # --- hidden flow ----------------------------------------------------------------------------------
 DECORATOR_TYPES = {"decorator", "annotation", "marker_annotation", "attribute_list", "attribute_item"}
@@ -90,9 +107,10 @@ SELF_NAMES = {"self", "this", "cls"}               # a call through these stays 
 # Names constructor methods have across mainstream languages (a method named like its class counts too).
 CONSTRUCTOR_NAMES = {"__init__", "__new__", "__post_init__", "constructor", "initialize", "init", "new",
                      "__construct"}
-# A method called on an object of unknown type is linked by name only when the name is distinctive: compound
-# names (render_template, parseRows) or long names. Short single words (get, append, all, now) are shared with
-# the standard libraries of most languages, so linking them by name would mostly be wrong.
+# A method called on an object of unknown type (not a name an import line brought in) is linked by name only when
+# the name is distinctive: compound names (render_template, parseRows) or long names. Short single words (get,
+# append, all, now) are shared with the standard libraries of most languages, so linking them by name would mostly
+# be wrong.
 DISTINCT_NAME_MIN_LEN = 10
 RECEIVER_FIELDS = ("object", "operand", "value", "expression", "receiver", "scope", "path")
 # containers whose last statement is the final statement of a function body

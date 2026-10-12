@@ -204,10 +204,12 @@ python3 -m venv .venv                 # Python 3.11 or newer
 .venv/bin/python -m pytest
 ```
 
-`.venv/bin/repo-analyzer` then runs the working copy (`python -m repo_analyzer` works the same). The tests cover file listing, parsing, map checking, deterministic completion, scoring, the report, the agent's
-policies, and whole runs. Whole runs use a fake Omnigent ([`tests/fake_omni.py`](tests/fake_omni.py)) that can
-finish, stop early, lose the network, fail, hang or be interrupted, so every recovery path is exercised without
-calling a model.
+`.venv/bin/repo-analyzer` then runs the working copy (`python -m repo_analyzer` works the same).
+
+The tests cover file listing, parsing, import matching, map checking, deterministic completion, scoring, the
+report, the agent's policies, and whole runs. Whole runs use a fake Omnigent
+([`tests/fake_omni.py`](tests/fake_omni.py)) that can finish, stop early, lose the network, fail, hang or be
+interrupted, so every recovery path is exercised without calling a model.
 
 ## Project layout
 
@@ -218,6 +220,7 @@ repo_analyzer/
   workspace.py     the .repo-analyzer/ folder: state, lock, logs
   files.py         which files belong to the project
   reader.py        tree-sitter parsing: pieces, calls, writes, hidden flow, complexity counts
+  imports.py       where each file's import lines point, in any language
   contract.py      reading and checking component maps
   completion.py    deterministic completion of a map
   agent.py         the mapping agent's task, instructions and sessions

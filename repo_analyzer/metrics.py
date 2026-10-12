@@ -5,24 +5,17 @@ Effort = (L + X) x C  +  N  +  TRIP_COST x (F + H + K + E + D)  +  (L + R) x (1 
 
 from __future__ import annotations
 
-import os
 import re
 from collections import Counter, defaultdict
 
 from . import config as K
 from .contract import EXCLUDED, TESTS, Contract, Resolution
+from .imports import Imports, module_name, read_imports
 from .reader import Repo
 
 COUNT_KEYS = ("decisions", "nesting", "datadeps", "vocabulary", "concurrency")
-_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_STEM_PARENT = {"__init__", "index", "mod", "main", "lib"}
-
-
-def _stem(path: str) -> str:
-    base = os.path.splitext(os.path.basename(path))[0]
-    if base in _STEM_PARENT:
-        base = os.path.basename(os.path.dirname(path)) or base
-    return base
+_PATH_RE = re.compile(r"[A-Za-z_$][\w$]*(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*")
+_UNKNOWN = object()                 # no import line explains a call: the other linking rules decide
 
 
 def _distinctive(name: str) -> bool:
@@ -70,10 +63,17 @@ class Scorer:
             for c in ids:
                 if "." not in (self.units[c].piece or ""):
                     self.top_defs[key].append(c)
-        self.import_words = {p: set(_WORD_RE.findall(f.import_text)) for p, f in repo.files.items()}
         self.file_names: dict[str, set[str]] = defaultdict(set)      # every name a file refers to
         for u in self.units:
             self.file_names[u.file] |= u.vocab
+        # where import lines point, and the top-level definitions of each file, for calls through imported names
+        self.imports: Imports = read_imports(repo)
+        self.top_in_file: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for ids in self.top_defs.values():
+            for c in ids:
+                self.top_in_file[(self.units[c].file, self.units[c].simple)].append(c)
+        self._levels_cache: dict[frozenset, list[set[str]]] = {}
+        self._hierarchy()
 
         # call edges: (caller unit, target unit, line owner, file, line)
         self.edges: list[tuple[int, int, str | None, str, int]] = []
@@ -100,9 +100,13 @@ class Scorer:
         return receiver in K.SELF_NAMES or (self.lang[path], receiver) in self.class_names
 
     def _resolve(self, name: str, path: str, caller: int, receiver: str | None = None) -> int | None:
-        """Fixed rule: through self/this, the method of the caller's class; through a class name, that class's
-        method; else the only definition with that name; else the one in the same file (same class first);
-        else the only one in a file the caller imports; else unlinked."""
+        """Fixed rule: through a name an import line brought in, the definition in the file that line points to;
+        through self/this, the method of the caller's class; through a class name, that class's method; else the
+        only definition with that name; else the one in the same file (same class first); else the only one in a
+        file the caller imports; else unlinked."""
+        via = self._through_import(name, path, caller, receiver)
+        if via is not _UNKNOWN:
+            return via
         cands = self.defs.get((self.lang[path], name))
         if not cands:
             return None
@@ -141,11 +145,77 @@ class Scorer:
             cls = (self.units[caller].piece or "").rsplit(".", 1)[0]
             in_class = [c for c in same if (self.units[c].piece or "").rsplit(".", 1)[0] == cls]
             return in_class[0] if len(in_class) == 1 else None
-        words = self.import_words.get(path, set())
-        imported = [c for c in cands if _stem(self.units[c].file) in words]
+        imported_files = self.imports.files.get(path, set())
+        imported = [c for c in cands if self.units[c].file in imported_files]
         if len({self.units[c].file for c in imported}) > 1:
             return None
         return imported[0] if len(imported) == 1 else None
+
+    def _through_import(self, name: str, path: str, caller: int, receiver: str | None):
+        """A call through a name an import line brought in (`bodyParser.json()` after
+        `var bodyParser = require('..')`, `helper()` after `from .utils import helper`) is looked up in the project
+        files that line points to, then in the files those import, up to REEXPORT_DEPTH steps on, nearest first.
+        Returns the definition; None when the line points outside the project or several definitions match;
+        _UNKNOWN when no import line explains the call."""
+        names = self.imports.names.get(path)
+        if not names:
+            return _UNKNOWN
+        if receiver is None:
+            head, rest = name, []
+        elif _PATH_RE.fullmatch(receiver):
+            head, *rest = re.split(r"\.|::|->", receiver)
+        else:
+            return _UNKNOWN
+        u = self.units[caller]
+        if head not in names or (u.kind == "function" and head in u.assigns):
+            return _UNKNOWN                    # not brought in by an import, or a local name that hides it
+        files = names[head]
+        if not files:
+            return None                        # a standard or installed library: never project code
+        real = self.imports.aliases.get(path, {}).get(head, head)      # `from x import a as b`: b is a
+
+        def found_in(f: str) -> list[int]:
+            if receiver is None:
+                return self.top_in_file.get((f, real), [])
+            hits = []
+            if not rest or module_name(f) == rest[-1]:      # mod.name(), pkg.mod.name()
+                hits += self.top_in_file.get((f, name), [])
+            m = self.methods_of.get((f, rest[-1] if rest else real), {}).get(name)    # Class.name()
+            if m is not None and self.scored(self.unit_owner[m]):
+                hits.append(m)
+            return hits
+
+        for level in self._levels(files):
+            hits = sorted({h for f in level for h in found_in(f)})
+            if hits:
+                return hits[0] if len(hits) == 1 else None
+        return _UNKNOWN
+
+    def _levels(self, files: set[str]) -> list[set[str]]:
+        """The files an import points to, then the files they import, and so on, REEXPORT_DEPTH steps on."""
+        key = frozenset(files)
+        levels = self._levels_cache.get(key)
+        if levels is None:
+            levels, seen, frontier = [], set(key), set(key)
+            for _ in range(K.REEXPORT_DEPTH + 1):
+                levels.append(frontier)
+                frontier = {g for f in frontier for g in self.imports.files.get(f, ())} - seen
+                seen |= frontier
+                if not frontier:
+                    break
+            self._levels_cache[key] = levels
+        return levels
+
+    def _import_closure(self, start) -> set[str]:
+        """Every file loaded by importing these files' imports, directly or through other imports."""
+        seen: set[str] = set()
+        stack = [g for f in start for g in self.imports.files.get(f, ())]
+        while stack:
+            f = stack.pop()
+            if f not in seen:
+                seen.add(f)
+                stack.extend(self.imports.files.get(f, ()))
+        return seen
 
     def _mentioned_methods(self, cands: list[int], path: str, caller: int) -> list[int]:
         """Methods among `cands` whose class the calling code refers to by name. Test code is read file-wide,
@@ -224,8 +294,8 @@ class Scorer:
     def _test_reach(self) -> set[int]:
         """Code the tests reach, following calls from test code through any code. From test code, a call on an
         object of unknown type reaches every matching method of the classes the test file refers to; a class the
-        tests refer to has its body reached; a call through self also reaches the method's overrides."""
-        self._hierarchy()
+        tests refer to has its body reached; a call through self also reaches the method's overrides; importing a
+        file runs its top-level code, and that of the files it imports."""
         calls_by_unit: dict[int, list] = defaultdict(list)
         for path, f in self.repo.files.items():
             for call in f.calls:
@@ -245,10 +315,12 @@ class Scorer:
                     if name in K.CONSTRUCTOR_NAMES or name == u.simple:
                         push(mid)
 
+        test_files = []
         for path, f in self.repo.files.items():
             owners = self.res.owner[path]
             if not any(o == TESTS for o in owners):
                 continue
+            test_files.append(path)
             lang = self.lang[path]
             for call in f.calls:
                 if call.runtime or not call.name or owners[call.line - 1] != TESTS:
@@ -265,10 +337,10 @@ class Scorer:
                     cid = self.class_rest.get(key)
                     if cid is not None and self.scored(self.unit_owner[cid]):
                         push(cid)
-            imported_stems = self.import_words.get(path, set())
-            for other, rest in self.file_rest_units.items():
-                if self.lang[other] == lang and _stem(other) in imported_stems and self.scored(self.unit_owner[rest]):
-                    push(rest)                         # importing a module runs its top-level code
+        for other in self._import_closure(test_files):
+            rest = self.file_rest_units.get(other)
+            if rest is not None and self.scored(self.unit_owner[rest]):
+                push(rest)                             # importing a module runs its top-level code
         while stack:
             uid = stack.pop()
             for path, call in calls_by_unit.get(uid, ()):
@@ -376,9 +448,11 @@ class Scorer:
             for call in f.calls:
                 lab = labels[call.line - 1]
                 # a name is searched only when the call gives no other clue: a plain call like foo(). A call
-                # through an object or module (x.get(), utils.foo()) is found through that object instead.
+                # through an object or module (x.get(), utils.foo()) is found through that object instead, and
+                # a name an import line brings in (from .utils import helper) through that line.
                 if lab and call.name and call.plain and (f.language, call.name) in self.top_defs \
-                        and call.name not in units[call.unit].assigns:
+                        and call.name not in units[call.unit].assigns \
+                        and call.name not in self.imports.words.get(path, ()):
                     acc[lab]["names"].add((f.language, call.name))
         for u in units:
             unit_events[u.id]["vocabulary"] = len(u.vocab)
@@ -489,7 +563,6 @@ class Scorer:
         own_by_file = defaultdict(list)
         for u in own:
             own_by_file[u.file].append(u)
-        stems = {p: _stem(p) for p in own_files}
 
         def run(opened: set[str]):
             opened = set(opened)
@@ -497,9 +570,8 @@ class Scorer:
             while True:
                 pending = set()
                 for p in opened:
-                    words = self.import_words.get(p, set())
-                    for q, s in stems.items():
-                        if q not in opened and s in words and self.lang[q] == self.lang[p]:
+                    for q in self.imports.files.get(p, ()):
+                        if q in own_files and q not in opened:
                             pending.add(q)
                     for u in own_by_file.get(p, ()):
                         for t in self.out_edges.get(u.id, ()):

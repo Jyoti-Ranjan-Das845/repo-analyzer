@@ -40,6 +40,18 @@ def test_javascript_go_java_pieces(tmp_path):
     assert sum(v for *_, v in repo.files["java/Svc.java"].decisions) >= 3
 
 
+def test_typescript_and_tsx_pieces(tmp_path):
+    # TypeScript's tag rules extend JavaScript's: functions, classes and arrow functions come from JavaScript's
+    root = write_files(tmp_path / "p", {
+        "src/a.ts": ("export function f(x: number) { return x }\nexport class A { m() { return 1 } }\n"
+                     "export const g = () => 1\ninterface Shape { area(): number }\n"),
+        "src/B.tsx": "export function B() { return <div/> }\nexport const C = () => <p/>\n",
+    })
+    repo = read_repo(str(root))
+    assert {"f", "A", "A.m", "g", "Shape"} <= set(repo.files["src/a.ts"].pieces)
+    assert {"B", "C"} <= set(repo.files["src/B.tsx"].pieces)
+
+
 def test_unparsable_and_binary_files_do_not_stop_reading(tmp_path):
     root = write_files(tmp_path / "p", {"ok.py": "def f():\n    return 1\n", "broken.py": "def (:\n  ???\n",
                                         "logo.png": b"\x89PNG\x00\x01\x02"})

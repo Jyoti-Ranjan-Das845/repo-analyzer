@@ -48,7 +48,8 @@ def test_links_between_parts(scored):
     assert {u["name"] for u in cart["evidence"]["outside"]} >= {"round_cents", "format_money"}
     assert cart["metrics"]["X"] > 0 and money["metrics"]["R"] > 0     # the cart uses money; money is used
     assert cart["metrics"]["T"] > 0.5                                  # tests reach Cart via Cart() and c.add/total
-    assert pay["metrics"]["T"] == 0                                    # nothing tests payments
+    # no test calls payments: only its top-level lines run, because the test imports the shop package
+    assert 0 < pay["metrics"]["T"] < 0.2
     assert pay["metrics"]["D"] >= 2                                    # decorator + handlers[...]()
     assert scored["repository"]["metrics"]["X"] == 0 and scored["repository"]["metrics"]["R"] == 0
 
